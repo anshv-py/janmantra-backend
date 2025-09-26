@@ -121,7 +121,7 @@ threadpoolctl==3.6.0
 tiktoken==0.9.0
 tokenizers==0.22.1
 torch==2.8.0
-torchvision==0.23.0+cu129
+torchvision==0.23.0
 tqdm==4.67.1
 transformers==4.56.2
 typing-inspect==0.9.0
@@ -136,4 +136,5 @@ wordcloud==1.9.4
 xxhash==3.5.0
 yarl==1.20.1
 zstandard==0.23.0
+
 
