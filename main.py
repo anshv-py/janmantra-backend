@@ -184,6 +184,33 @@ def predict_sentiment(comment: str) -> dict:
             "error": str(e)
         }
 
+@app.post("/suggestions")
+async def generate_suggestions(summary: str):
+    try:
+        if not gemini_model:
+            return "Gemini API not available"
+        
+        prompt = f"""
+        Based on the following summary of comments, provide 4 actionable suggestions for improvement. 
+        Each suggestion should be concise and relevant to the themes identified in the summary.
+        
+        Summary:
+        {summary}
+        
+        Suggestions:
+        1.
+        2.
+        3.
+        4.
+        """
+        
+        response = gemini_model.generate_content(prompt)
+        return response.text.strip()
+        
+    except Exception as e:
+        print(f"Gemini API error: {e}")
+        return f"Error generating suggestions with Gemini: {str(e)}"
+
 def generate_gemini_summary(comments: List[str], max_length: int = 150, min_length: int = 50) -> str:
     try:
         if not gemini_model:
@@ -375,5 +402,3 @@ async def startup_event():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0")
-
-
