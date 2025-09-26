@@ -316,17 +316,6 @@ async def root():
         }
     }
 
-@app.get("/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "models": {
-            "custom_sentiment": tokenizer is not None and sentiment_model is not None,
-            "fallback_sentiment": fallback_pipeline is not None,
-            "gemini": gemini_model is not None
-        }
-    }
-
 @app.post("/analyze")
 async def analyze_comments(payload: CommentRequest):    
     if not payload.comments:
