@@ -10,10 +10,14 @@ import google.generativeai as genai
 from wordcloud import WordCloud, STOPWORDS
 import numpy as np
 
+from google.cloud import storage
+
+GCS_BUCKET = "janmatra-storage-bucket"
+
 app = FastAPI(title="Comment Processing API", version="1.0")
 
-SENTIMENT_MODEL_PATH = "./models/xlm-roberta-zero-shot"
-TOKENIZER_PATH = "./models/xlm-roberta-base"
+SENTIMENT_MODEL_PATH = "xlm-roberta-zero-shot"
+TOKENIZER_PATH = "xlm-roberta-base"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyDBRkT19u526TWs1w2_s4rE1-DgTu5fLbg")
 
 tokenizer = None
@@ -22,6 +26,7 @@ gemini_model = None
 fallback_pipeline = None
 
 SENTIMENT_LABELS = ["Positive", "Negative", "Neutral", "Suggestive"]
+SOURCE_TITLE = ""
 
 class CommentRequest(BaseModel):
     comments: List[str]
@@ -36,6 +41,7 @@ async def analyze_extension_data(extension_data: List[Any]):
     if not extension_data:
         raise HTTPException(status_code=400, detail="No comments provided")
     
+    SOURCE_TITLE = extension_data[0].get('source_title', 'Unknown Source')
     comment_texts = []
     for i, item in enumerate(extension_data):
         print(f"Item {i}: {type(item)} - {item.keys() if isinstance(item, dict) else 'Not a dict'}")
@@ -53,39 +59,39 @@ async def analyze_extension_data(extension_data: List[Any]):
     request = CommentRequest(comments=comment_texts)
     return await analyze_comments(request)
 
+def download_from_gcs(gcs_path: str):
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(GCS_BUCKET)
+    
+    blobs = bucket.list_blobs(prefix=gcs_path)
+
 def load_models():
     global tokenizer, sentiment_model, gemini_model, fallback_pipeline
-    
+
     try:
         print("Attempting to load custom sentiment analysis model...")
-        
-        # Try to load custom models
-        if os.path.exists(SENTIMENT_MODEL_PATH) and os.path.exists(TOKENIZER_PATH):
-            tokenizer = XLMRobertaTokenizerFast.from_pretrained(TOKENIZER_PATH)
-            sentiment_model = XLMRobertaForSequenceClassification.from_pretrained(SENTIMENT_MODEL_PATH)
-            sentiment_model.eval()
-            print("Custom models loaded successfully!")
-        else:
-            print("Custom models not found. Loading fallback model...")
-            # Use a pre-trained sentiment model as fallback
-            fallback_pipeline = pipeline(
-                "sentiment-analysis", 
-                model="cardiffnlp/twitter-xlm-roberta-base-sentiment-multilingual",
-                return_all_scores=True
-            )
-            print("Fallback sentiment model loaded!")
-        
+
+        # If models not present locally, fetch from GCS
+        if not (os.path.exists(SENTIMENT_MODEL_PATH) and os.path.exists(TOKENIZER_PATH)):
+            print("Local models not found. Downloading from GCS...")
+            download_from_gcs(f"xlm-roberta-zero-shot")
+            download_from_gcs(f"xlm-roberta-base")
+
+        tokenizer = XLMRobertaTokenizerFast.from_pretrained(TOKENIZER_PATH)
+        sentiment_model = XLMRobertaForSequenceClassification.from_pretrained(SENTIMENT_MODEL_PATH)
+        sentiment_model.eval()
+        print("Custom models loaded successfully!")
+
         # Configure Gemini API
         print("Configuring Gemini API...")
         genai.configure(api_key=GEMINI_API_KEY)
         gemini_model = genai.GenerativeModel('gemini-2.5-flash')
         print("Gemini API configured!")
-        
+
         print("All models loaded successfully!")
-        
+
     except Exception as e:
-        print(f"Error loading models: {e}")
-        print("Continuing with limited functionality...")
+        pass
 
 def predict_sentiment(comment: str) -> dict:
     global tokenizer, sentiment_model, fallback_pipeline
@@ -112,6 +118,7 @@ def predict_sentiment(comment: str) -> dict:
                 confidence = probabilities[0][predicted_class_idx].item()
             
             return {
+
                 "sentiment": predicted_label,
                 "confidence": round(confidence, 4),
                 "all_probabilities": {
@@ -336,6 +343,7 @@ async def analyze_comments(payload: CommentRequest):
         sentiment_analysis = analyze_sentiment_distribution(sentiment_results)
         
         return {
+            "Source Title": SOURCE_TITLE,
             "sentiment_analysis": {
                 "individual_results": sentiment_results,
                 "distribution": sentiment_analysis
@@ -366,4 +374,4 @@ async def startup_event():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0")
