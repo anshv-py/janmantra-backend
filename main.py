@@ -1,20 +1,32 @@
 import io
 import base64
 import os
-from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, Request, HTTPException
+from typing import List, Optional, Any
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import torch
 from transformers import XLMRobertaTokenizerFast, XLMRobertaForSequenceClassification, pipeline
 import google.generativeai as genai
 from wordcloud import WordCloud, STOPWORDS
-import numpy as np
-
+import pymongo
+from fastapi.encoders import jsonable_encoder
+from bson import ObjectId
 from google.cloud import storage
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.join(os.path.dirname(__file__), "sacred-truck-473222-n2-30bd10f14101.json")
+
 
 GCS_BUCKET = "janmatra-storage-bucket"
-
+MONGO_URL = "mongodb+srv://anshvahini16:Curet24.Nelll@volume-logs.iwoipqu.mongodb.net/?retryWrites=true&w=majority&appName=volume-logs"
 app = FastAPI(title="Comment Processing API", version="1.0")
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 SENTIMENT_MODEL_PATH = "xlm-roberta-zero-shot"
 TOKENIZER_PATH = "xlm-roberta-base"
@@ -24,6 +36,9 @@ tokenizer = None
 sentiment_model = None
 gemini_model = None
 fallback_pipeline = None
+mongo_client = None
+db = None
+collection = None
 
 SENTIMENT_LABELS = ["Positive", "Negative", "Neutral", "Suggestive"]
 SOURCE_TITLE = ""
@@ -59,11 +74,27 @@ async def analyze_extension_data(extension_data: List[Any]):
     request = CommentRequest(comments=comment_texts)
     return await analyze_comments(request)
 
-def download_from_gcs(gcs_path: str):
+def download_from_gcs(gcs_path: str, local_dir: str = "./models/"):
+    print(f"📥 Downloading files from GCS: {gcs_path}")
     storage_client = storage.Client()
     bucket = storage_client.bucket(GCS_BUCKET)
-    
-    blobs = bucket.list_blobs(prefix=gcs_path)
+
+    blobs = list(bucket.list_blobs(prefix=gcs_path))
+    if not blobs:
+        print(f"⚠️ No files found in bucket path: {gcs_path}")
+        return
+
+    for blob in blobs:
+        local_path = os.path.join(local_dir, blob.name)
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+
+        if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+            print(f"✅ Already exists, skipping: {local_path}")
+            continue
+        
+        print(f"⬇️ Downloading: {blob.name}")
+        blob.download_to_filename(local_path)
+        print(f"✅ Downloaded: {blob.name} -> {local_path}")
 
 def load_models():
     global tokenizer, sentiment_model, gemini_model, fallback_pipeline
@@ -71,7 +102,6 @@ def load_models():
     try:
         print("Attempting to load custom sentiment analysis model...")
 
-        # If models not present locally, fetch from GCS
         if not (os.path.exists(SENTIMENT_MODEL_PATH) and os.path.exists(TOKENIZER_PATH)):
             print("Local models not found. Downloading from GCS...")
             download_from_gcs(f"xlm-roberta-zero-shot")
@@ -82,7 +112,6 @@ def load_models():
         sentiment_model.eval()
         print("Custom models loaded successfully!")
 
-        # Configure Gemini API
         print("Configuring Gemini API...")
         genai.configure(api_key=GEMINI_API_KEY)
         gemini_model = genai.GenerativeModel('gemini-2.5-flash')
@@ -236,23 +265,6 @@ def generate_gemini_summary(comments: List[str], max_length: int = 150, min_leng
         print(f"Gemini API error: {e}")
         return f"Error generating summary with Gemini: {str(e)}"
 
-def generate_fallback_summary(comments: List[str], max_length: int = 150) -> str:
-    try:
-        all_text = " ".join(comments)
-        word_count = len(comments)
-        
-        if word_count == 1:
-            summary = f"Single comment provided: {comments[0][:max_length]}..."
-        elif word_count <= 5:
-            summary = f"Summary of {word_count} comments covering various feedback points."
-        else:
-            summary = f"Summary of {word_count} comments with diverse feedback and opinions."
-        
-        return summary
-        
-    except Exception as e:
-        return f"Error generating fallback summary: {str(e)}"
-
 def generate_wordcloud_base64(text: str) -> str:
     try:
         stopwords = set(STOPWORDS)
@@ -349,8 +361,6 @@ async def analyze_comments(payload: CommentRequest):
                 payload.max_summary_length, 
                 payload.min_summary_length
             )
-        else:
-            summary_text = generate_fallback_summary(payload.comments, 1500)
         
         print("Generating word cloud...")
         wordcloud_text = summary_text if summary_text and not summary_text.startswith("Error") else " ".join(payload.comments)
@@ -384,12 +394,43 @@ async def analyze_comments(payload: CommentRequest):
         print(f"Error in analyze_comments: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
+@app.get("/records/{source_title}")
+async def get_records_by_source(source_title: str):
+    try:
+        records = list(collection.find({"SourceTitle": source_title}))
+        if not records:
+            raise HTTPException(status_code=404, detail="No records found for this source title")
+
+        # Convert ObjectIds to strings
+        for record in records:
+            record["_id"] = str(record["_id"])
+
+        return jsonable_encoder(
+            {"source_title": source_title, "records": records},
+            custom_encoder={ObjectId: str}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching records: {e}")
+
+@app.get("/sources")
+async def get_all_source_titles():
+    global collection
+    try:
+        titles = collection.distinct("SourceTitle")
+        return {"available_source_titles": titles}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching source titles: {e}")
+
 @app.on_event("startup")
 async def startup_event():
+    global mongo_client, db, collection
     load_models()
+    mongo_client = pymongo.MongoClient(MONGO_URL)
+    db = mongo_client["vtqube"]
+    collection = db["sentiment_records"]
+    print("✅ MongoDB connected!")
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8080))  # Render sets PORT dynamically
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
 
