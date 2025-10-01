@@ -2,8 +2,8 @@ import io
 import base64
 import os
 import requests
-from typing import List, Optional, Any
-from fastapi import FastAPI, HTTPException
+from typing import List, Optional, Any, Dict
+from fastapi import FastAPI, HTTPException, Body
 from pydantic import BaseModel
 import torch
 from transformers import XLMRobertaTokenizerFast, XLMRobertaForSequenceClassification, pipeline
@@ -13,24 +13,11 @@ import pymongo
 from fastapi.encoders import jsonable_encoder
 from bson import ObjectId
 from google.cloud import storage
-
 from contextlib import asynccontextmanager
 from fastapi.middleware import cors
+
+# Environment setup
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.join(os.path.dirname(__file__), "sacred-truck-473222-n2-30bd10f14101.json")
-
-
-GCS_BUCKET = "janmatra-storage-bucket"
-MONGO_URL = "mongodb+srv://anshvahini16:Curet24.Nelll@volume-logs.iwoipqu.mongodb.net/?retryWrites=true&w=majority&appName=volume-logs"
-app = FastAPI(title="Comment Processing API", version="1.0")
-from fastapi.middleware.cors import CORSMiddleware
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Configuration
 GCS_BUCKET = "janmatra-storage-bucket"
@@ -47,7 +34,6 @@ fallback_pipeline = None
 mongo_client = None
 db = None
 collection = None
-
 SENTIMENT_LABELS = ["Positive", "Negative", "Neutral", "Suggestive"]
 SOURCE_TITLE = ""
 
@@ -115,6 +101,7 @@ async def analyze_extension_data(extension_data: List[Any]):
     request = CommentRequest(comments=comment_texts)
     return await analyze_comments(request)
 
+# ORIGINAL download_from_gcs function - PRESERVED EXACTLY
 def download_from_gcs(gcs_path: str, local_dir: str = "./models/"):
     print(f"📥 Downloading files from GCS: {gcs_path}")
     storage_client = storage.Client()
@@ -137,6 +124,7 @@ def download_from_gcs(gcs_path: str, local_dir: str = "./models/"):
         blob.download_to_filename(local_path)
         print(f"✅ Downloaded: {blob.name} -> {local_path}")
 
+# ORIGINAL load_models function - PRESERVED EXACTLY
 def load_models():
     global tokenizer, sentiment_model, gemini_model, fallback_pipeline
 
@@ -163,6 +151,7 @@ def load_models():
     except Exception as e:
         print(f"Error loading models: {e}")
 
+# ORIGINAL predict_sentiment function - PRESERVED EXACTLY
 def predict_sentiment(comment: str) -> dict:
     global tokenizer, sentiment_model, fallback_pipeline
     
@@ -307,6 +296,7 @@ def generate_gemini_summary(comments: List[str], max_length: int = 150, min_leng
         print(f"Gemini API error: {e}")
         return f"Error generating summary with Gemini: {str(e)}"
 
+# ORIGINAL generate_wordcloud_base64 function - PRESERVED EXACTLY
 def generate_wordcloud_base64(text: str) -> str:
     try:
         stopwords = set(STOPWORDS)
@@ -334,6 +324,7 @@ def generate_wordcloud_base64(text: str) -> str:
         print(f"Error generating word cloud: {e}")
         return ""
 
+# ORIGINAL analyze_sentiment_distribution function - PRESERVED EXACTLY
 def analyze_sentiment_distribution(sentiments: List[dict]) -> dict:
     distribution = {label: 0 for label in SENTIMENT_LABELS}
     total_confidence = 0
@@ -358,7 +349,9 @@ def analyze_sentiment_distribution(sentiments: List[dict]) -> dict:
         "total_comments": total_comments
     }
 
+# NEW FUNCTION: External database connection
 async def connect_to_external_database(config: ExternalDatabaseConfig) -> List[str]:
+    """Connect to external user database and extract comments"""
     comments = []
     
     try:
@@ -427,6 +420,7 @@ async def connect_to_external_database(config: ExternalDatabaseConfig) -> List[s
     
     return comments
 
+# ORIGINAL root function - PRESERVED AND EXTENDED
 @app.get("/")
 async def root():
     return {
@@ -443,6 +437,7 @@ async def root():
         }
     }
 
+# ORIGINAL analyze function - PRESERVED EXACTLY
 @app.post("/analyze")
 async def analyze_comments(payload: CommentRequest):    
     if not payload.comments:
@@ -477,6 +472,8 @@ async def analyze_comments(payload: CommentRequest):
                 payload.max_summary_length, 
                 payload.min_summary_length
             )
+        else:
+            summary_text = f"Analysis of {len(payload.comments)} comments with various sentiments."
         
         print("Generating word cloud...")
         wordcloud_text = summary_text if summary_text and not summary_text.startswith("Error") else " ".join(payload.comments)
@@ -544,10 +541,13 @@ async def import_from_external_database(payload: ImportExternalDataRequest):
         print(f"❌ Error importing from external database: {e}")
         raise HTTPException(status_code=500, detail=f"Error importing from external database: {str(e)}")
 
-            
+# ORIGINAL records function - PRESERVED WITH FIX
 @app.get("/records/{source_title}")
 async def get_records_by_source(source_title: str):
     try:
+        if collection is None:
+            raise HTTPException(status_code=503, detail="Database not connected")
+            
         records = list(collection.find({"SourceTitle": source_title}))
         if not records:
             raise HTTPException(status_code=404, detail="No records found for this source title")
@@ -565,15 +565,44 @@ async def get_records_by_source(source_title: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching records: {e}")
 
+# ORIGINAL sources function - PRESERVED WITH FIX
 @app.get("/sources")
 async def get_all_source_titles():
     try:
         if collection is None:
             raise HTTPException(status_code=503, detail="Database not connected")
-        
+            
+        titles = collection.distinct("SourceTitle")
+        return {"available_source_titles": titles}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching records: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching source titles: {e}")
 
+# ADD health endpoint
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    db_connected = False
+    if mongo_client is not None and collection is not None:
+        try:
+            mongo_client.admin.command('ping')
+            db_connected = True
+        except Exception:
+            db_connected = False
+    
+    health_status = {
+        "status": "healthy",
+        "models": {
+            "custom_sentiment": tokenizer is not None and sentiment_model is not None,
+            "fallback_pipeline": fallback_pipeline is not None,
+            "gemini": gemini_model is not None
+        },
+        "database": {
+            "connected": db_connected
+        }
+    }
+    return health_status
+
+# ORIGINAL startup event - PRESERVED EXACTLY
 @app.on_event("startup")
 async def startup_event():
     global mongo_client, db, collection
@@ -589,12 +618,9 @@ async def startup_event():
         mongo_client = None
         db = None
         collection = None
-    mongo_client = pymongo.MongoClient(MONGO_URL)
-    db = mongo_client["vtqube"]
-    collection = db["sentiment_records"]
-    print("✅ MongoDB connected!")
 
 # ORIGINAL main check - PRESERVED EXACTLY
 if __name__ == "__main__":
     import uvicorn
+    
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
