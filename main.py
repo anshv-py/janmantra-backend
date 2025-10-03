@@ -2,8 +2,9 @@ import io
 import base64
 import os
 import requests
+import json
 from typing import List, Optional, Any, Dict
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, Request
 from pydantic import BaseModel
 import torch
 from transformers import XLMRobertaTokenizerFast, XLMRobertaForSequenceClassification, pipeline
@@ -25,11 +26,12 @@ os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.join(os.path.dirname(__fi
 
 # Configuration
 GCS_BUCKET = "janmatra-storage-bucket"
-MONGO_URL = "mongodb+srv://anshvahini16:Curet24.Nelll@volume-logs.iwoipqu.mongodb.net/?retryWrites=true&w=majority&appName=volume-logs"
+MONGO_URL = os.getenv("MONGO_URL", "")
 SENTIMENT_MODEL_PATH = "./models/xlm-roberta-zero-shot"
 TOKENIZER_PATH = "./models/xlm-roberta-base"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GEMINI_CHAT_KEY = os.getenv("GEMINI_CHAT_KEY", "")
 
 # Global variables - EXACTLY as original
 tokenizer = None
@@ -55,6 +57,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+class ChatbotRequest(BaseModel):
+    prompt: str
 
 # Pydantic models
 class CommentRequest(BaseModel):
@@ -184,7 +189,6 @@ def predict_sentiment(comment: str) -> dict:
 
             response_text = response.choices[0].message.content.strip()
 
-            import json
             if response_text.startswith("```"):
                 response_text = response_text.split("```")[1]
                 if response_text.startswith("json"):
@@ -630,7 +634,35 @@ async def startup_event():
         db = None
         collection = None
 
-# ORIGINAL main check - PRESERVED EXACTLY
+@app.post("/chatbot")
+async def chatbot_interaction(request: ChatbotRequest):
+    prompt_text = request.prompt.strip()
+    if not prompt_text:
+        raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
+
+    try:
+        # Use GEMINI_API_KEY
+        if not GEMINI_CHAT_KEY:
+            return {"error": "Gemini API key is not set."}
+        
+        genai.configure(api_key=GEMINI_CHAT_KEY)
+        chat_model = genai.GenerativeModel('gemini-2.0-flash-exp')
+
+        gemini_prompt = f"""Act as an intelligent assistant for the JanMatra platform.
+        Respond conversationally and help users understand their public feedback data, generate reports, and suggest improvements.
+        User says: {prompt_text}
+        Respond to it like a chatbot, dont use any bold italic underline or markdown formattings. Keep it concise and relevant.
+        """
+
+        response = chat_model.generate_content(gemini_prompt)
+        answer = response.text.strip() if hasattr(response, 'text') else str(response)
+
+        return {"response": answer}
+
+    except Exception as e:
+        print(f"Gemini chatbot error: {e}")
+        return {"error": str(e)}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
