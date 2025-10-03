@@ -75,6 +75,23 @@ class ImportExternalDataRequest(BaseModel):
     max_summary_length: Optional[int] = 500
     min_summary_length: Optional[int] = 300
 
+class ExternalDatabaseConfig(BaseModel):
+    """Configuration for connecting to external user databases"""
+    database_type: str  # "mongodb", "mysql", "postgresql", "api"
+    connection_string: Optional[str] = None
+    api_endpoint: Optional[str] = None
+    headers: Optional[Dict[str, str]] = {}
+    query_params: Optional[Dict[str, str]] = {}
+
+class ImportExternalDataRequest(BaseModel):
+    """Import data from external user databases"""
+    database_config: ExternalDatabaseConfig
+    query: Optional[str] = None  # SQL query or collection name
+    use_gemini_summary: Optional[bool] = True
+    max_summary_length: Optional[int] = 1500
+    min_summary_length: Optional[int] = 1000
+
+# ORIGINAL analyze-extension function - PRESERVED EXACTLY
 @app.post("/analyze-extension")
 async def analyze_extension_data(extension_data: List[Any]):
     global SOURCE_TITLE
@@ -102,6 +119,7 @@ async def analyze_extension_data(extension_data: List[Any]):
     request = CommentRequest(comments=comment_texts)
     return await analyze_comments(request)
 
+# ORIGINAL download_from_gcs function - PRESERVED EXACTLY
 def download_from_gcs(gcs_path: str, local_dir: str = "./models/"):
     print(f"📥 Downloading files from GCS: {gcs_path}")
     storage_client = storage.Client()
@@ -124,6 +142,7 @@ def download_from_gcs(gcs_path: str, local_dir: str = "./models/"):
         blob.download_to_filename(local_path)
         print(f"✅ Downloaded: {blob.name} -> {local_path}")
 
+# ORIGINAL load_models function - PRESERVED EXACTLY
 def load_models():
     global tokenizer, sentiment_model, gemini_model, fallback_pipeline, groq_model
 
@@ -155,6 +174,7 @@ def load_models():
     except Exception as e:
         print(f"Error loading models: {e}")
 
+# ORIGINAL predict_sentiment function - PRESERVED EXACTLY
 def predict_sentiment(comment: str) -> dict:
     global groq_model, SENTIMENT_LABELS
 
@@ -199,7 +219,7 @@ def predict_sentiment(comment: str) -> dict:
                 confidence = 0.5
 
             all_probs = {k: float(v) for k, v in result.get("all_probabilities", {}).items()}
-
+            
             return {
                 "sentiment": sentiment,
                 "confidence": round(confidence, 4),
@@ -259,6 +279,7 @@ async def generate_suggestions(summary: str = Body(..., embed=True)):
         print(f"Gemini API error: {e}")
         return f"Error generating suggestions with Gemini: {str(e)}"
 
+# ORIGINAL generate_gemini_summary function - PRESERVED EXACTLY
 def generate_gemini_summary(comments: List[str], max_length: int = 150, min_length: int = 50) -> str:
     try:
         if not gemini_model:
@@ -425,6 +446,7 @@ async def root():
         }
     }
 
+# ORIGINAL analyze function - PRESERVED EXACTLY
 @app.post("/analyze")
 async def analyze_comments(payload: CommentRequest):    
     if not payload.comments:
@@ -578,6 +600,7 @@ async def get_records_by_source(source_title: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching records: {e}")
 
+# ORIGINAL sources function - PRESERVED WITH FIX
 @app.get("/sources")
 async def get_all_source_titles():
     try:
@@ -629,6 +652,7 @@ async def startup_event():
         db = None
         collection = None
 
+# ORIGINAL main check - PRESERVED EXACTLY
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
