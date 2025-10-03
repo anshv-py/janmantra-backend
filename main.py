@@ -16,6 +16,9 @@ from google.cloud import storage
 from contextlib import asynccontextmanager
 from fastapi.middleware import cors
 from openai import OpenAI
+import dotenv
+
+load_dotenv()
 
 # Environment setup
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.join(os.path.dirname(__file__), "sacred-truck-473222-n2-30bd10f14101.json")
@@ -25,8 +28,8 @@ GCS_BUCKET = "janmatra-storage-bucket"
 MONGO_URL = "mongodb+srv://anshvahini16:Curet24.Nelll@volume-logs.iwoipqu.mongodb.net/?retryWrites=true&w=majority&appName=volume-logs"
 SENTIMENT_MODEL_PATH = "./models/xlm-roberta-zero-shot"
 TOKENIZER_PATH = "./models/xlm-roberta-base"
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyDBRkT19u526TWs1w2_s4rE1-DgTu5fLbg")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 # Global variables - EXACTLY as original
 tokenizer = None
@@ -68,30 +71,12 @@ class ExternalDatabaseConfig(BaseModel):
     query_params: Optional[Dict[str, str]] = {}
 
 class ImportExternalDataRequest(BaseModel):
-    """Import data from external user databases"""
     database_config: ExternalDatabaseConfig
     query: Optional[str] = None  # SQL query or collection name
     use_gemini_summary: Optional[bool] = True
     max_summary_length: Optional[int] = 500
     min_summary_length: Optional[int] = 300
 
-class ExternalDatabaseConfig(BaseModel):
-    """Configuration for connecting to external user databases"""
-    database_type: str  # "mongodb", "mysql", "postgresql", "api"
-    connection_string: Optional[str] = None
-    api_endpoint: Optional[str] = None
-    headers: Optional[Dict[str, str]] = {}
-    query_params: Optional[Dict[str, str]] = {}
-
-class ImportExternalDataRequest(BaseModel):
-    """Import data from external user databases"""
-    database_config: ExternalDatabaseConfig
-    query: Optional[str] = None  # SQL query or collection name
-    use_gemini_summary: Optional[bool] = True
-    max_summary_length: Optional[int] = 1500
-    min_summary_length: Optional[int] = 1000
-
-# ORIGINAL analyze-extension function - PRESERVED EXACTLY
 @app.post("/analyze-extension")
 async def analyze_extension_data(extension_data: List[Any]):
     global SOURCE_TITLE
@@ -119,7 +104,6 @@ async def analyze_extension_data(extension_data: List[Any]):
     request = CommentRequest(comments=comment_texts)
     return await analyze_comments(request)
 
-# ORIGINAL download_from_gcs function - PRESERVED EXACTLY
 def download_from_gcs(gcs_path: str, local_dir: str = "./models/"):
     print(f"📥 Downloading files from GCS: {gcs_path}")
     storage_client = storage.Client()
@@ -142,7 +126,6 @@ def download_from_gcs(gcs_path: str, local_dir: str = "./models/"):
         blob.download_to_filename(local_path)
         print(f"✅ Downloaded: {blob.name} -> {local_path}")
 
-# ORIGINAL load_models function - PRESERVED EXACTLY
 def load_models():
     global tokenizer, sentiment_model, gemini_model, fallback_pipeline, groq_model
 
@@ -167,14 +150,13 @@ def load_models():
             base_url="https://api.groq.com/openai/v1",
             api_key=GROQ_API_KEY
         )
-        print("DeepSeek API configured!")
+        print("Groq API configured!")
 
         print("All models loaded successfully!")
 
     except Exception as e:
         print(f"Error loading models: {e}")
 
-# ORIGINAL predict_sentiment function - PRESERVED EXACTLY
 def predict_sentiment(comment: str) -> dict:
     global groq_model, SENTIMENT_LABELS
 
