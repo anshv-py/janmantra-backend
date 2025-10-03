@@ -16,7 +16,7 @@ from google.cloud import storage
 from contextlib import asynccontextmanager
 from fastapi.middleware import cors
 from openai import OpenAI
-import dotenv
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -80,16 +80,15 @@ class ImportExternalDataRequest(BaseModel):
 @app.post("/analyze-extension")
 async def analyze_extension_data(extension_data: List[Any]):
     global SOURCE_TITLE
-    
+    print(extension_data)
     print(f"Received extension data: {len(extension_data)} items")
     
     if not extension_data:
         raise HTTPException(status_code=400, detail="No comments provided")
     
-    SOURCE_TITLE = extension_data[0].get('sourceTitle', 'Unknown Source')
+    SOURCE_TITLE = extension_data[0].get('metadata', '').get('title', 'Unknown Source')
     comment_texts = []
     for i, item in enumerate(extension_data):
-        print(f"Item {i}: {type(item)} - {item.keys() if isinstance(item, dict) else 'Not a dict'}")
         if isinstance(item, dict) and 'text' in item:
             text = item['text']
             if text and text.strip():
@@ -474,7 +473,6 @@ async def analyze_comments(payload: CommentRequest):
         
         # Prepare response data
         response_data = {
-            "Source Title": SOURCE_TITLE,
             "sentiment_analysis": {
                 "individual_results": sentiment_results,
                 "distribution": sentiment_analysis
@@ -495,12 +493,10 @@ async def analyze_comments(payload: CommentRequest):
             }
         }
         
-        # UPDATED: Store in MongoDB with upsert logic (update if exists, insert if new)
         if collection is not None and SOURCE_TITLE:
             try:
                 # Prepare document for MongoDB
                 mongo_document = {
-                    "SourceTitle": SOURCE_TITLE,
                     **response_data
                 }
                 
